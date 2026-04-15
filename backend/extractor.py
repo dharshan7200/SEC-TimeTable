@@ -145,10 +145,11 @@ def parse_pdf_text(text):
 def merge_slots(rows):
     """
     Converts raw rows to the tuple format expected by format_output,
-    without merging contiguous time slots. This ensures the frontend
-    receives granular 1-hour slots for its grid.
+    merging contiguous time slots. This ensures that consecutive
+    1-hour slots for the same class on the same day are grouped
+    into a single continuous time block.
     """
-    final = []
+    grouped = defaultdict(list)
     for r in rows:
         key = (
             r["Course Name"],
@@ -160,7 +161,23 @@ def merge_slots(rows):
         )
         start = to_minutes(r["Start"])
         end = to_minutes(r["End"])
-        final.append((*key, start, end))
+        grouped[key].append((start, end))
+
+    final = []
+    for key, intervals in grouped.items():
+        intervals.sort(key=lambda x: x[0])
+        merged = []
+        for start, end in intervals:
+            if not merged:
+                merged.append([start, end])
+            else:
+                last_start, last_end = merged[-1]
+                if start <= last_end:
+                    merged[-1][1] = max(last_end, end)
+                else:
+                    merged.append([start, end])
+        for m_start, m_end in merged:
+            final.append((*key, m_start, m_end))
 
     return final
 
@@ -170,10 +187,6 @@ def format_output(merged_rows):
     ready for the API response.
     """
     courses = []
-    
-    # We want to group by Course Code to present a cleaner structure if needed,
-    # but for now, let's just return the flat list of available slots/options.
-    # The CSP solver will need to group them.
     
     for (name, code, credits, faculty, slot, day, start, end) in merged_rows:
         courses.append({
@@ -188,16 +201,9 @@ def format_output(merged_rows):
         })
     return courses
 
-def extract_courses(file_bytes):
-    """
-    Main entry point for API (File Upload).
-    """
-    text = extract_text_from_bytes(file_bytes)
-    return extract_courses_from_text(text)
-
 def extract_courses_from_text(text):
     """
-    Main entry point for API (Text Paste).
+    Main entry point for API string parsing.
     """
     raw_rows = parse_pdf_text(text)
     merged = merge_slots(raw_rows)
